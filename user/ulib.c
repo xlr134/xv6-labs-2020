@@ -103,13 +103,13 @@ memmove(void *vdst, const void *vsrc, int n)
 
   dst = vdst;
   src = vsrc;
-  if (src > dst) {
+  if (src > dst) {// 为了避免地址重合 从头开始遍历
     while(n-- > 0)
       *dst++ = *src++;
-  } else {
+  } else {//
     dst += n;
     src += n;
-    while(n-- > 0)
+    while(n-- > 0)// 为了避免地址重合 从尾开始遍历
       *--dst = *--src;
   }
   return vdst;
