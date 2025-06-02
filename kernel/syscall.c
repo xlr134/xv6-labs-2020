@@ -104,6 +104,8 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_trace(void);
+extern uint64 sys_sysinfo(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,20 +129,130 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_trace]   sys_trace,
+[SYS_sysinfo] sys_sysinfo
+};
+// kernel/syscall.c
+// 定义系统调用名称的字符串数组
+const char* kama_syscall_names[] = {
+[SYS_fork]    "fork",
+[SYS_exit]    "exit",
+[SYS_wait]    "wait",
+[SYS_pipe]    "pipe",
+[SYS_read]    "read",
+[SYS_kill]    "kill",
+[SYS_exec]    "exec",
+[SYS_fstat]   "fstat",
+[SYS_chdir]   "chdir",
+[SYS_dup]     "dup",
+[SYS_getpid]  "getpid",
+[SYS_sbrk]    "sbrk",
+[SYS_sleep]   "sleep",
+[SYS_uptime]  "uptime",
+[SYS_open]    "open",
+[SYS_write]   "write",
+[SYS_mknod]   "mknod",
+[SYS_unlink]  "unlink",
+[SYS_link]    "link",
+[SYS_mkdir]   "mkdir",
+[SYS_close]   "close",
+[SYS_trace]   "trace",
+[SYS_sysinfo] "sys_sysinfo"
 };
 
+//打印参数相关设置（开始）-----
+enum argtype{
+  ARG_INT,
+  ARG_PTR,
+  ARG_STR
+
+};
+
+static struct sysycall_args{
+  int nargs;
+  enum argtype argtypes[6];
+} syscall_arg_tables[] = {
+[SYS_fork]    {0,{}},
+[SYS_exit]    {1,{ARG_INT}},
+[SYS_wait]    {1,{ARG_PTR}},
+[SYS_pipe]    {1,{ARG_PTR}},
+[SYS_read]    {3,{ARG_INT,ARG_PTR,ARG_INT}},
+[SYS_kill]    {1,{ARG_INT}},
+[SYS_exec]    {2,{ARG_STR,ARG_PTR}},
+[SYS_fstat]   {2,{ARG_INT,ARG_PTR}},
+[SYS_chdir]   {1,{ARG_STR}},
+[SYS_dup]     {1,{ARG_INT}},
+[SYS_getpid]  {0,{}},
+[SYS_sbrk]    {1,{ARG_INT}},
+[SYS_sleep]   {1,{ARG_INT}},
+[SYS_uptime]  {0,{}},
+[SYS_open]    {2,{ARG_STR,ARG_INT}},
+[SYS_write]   {3,{ARG_INT,ARG_PTR,ARG_INT}},
+[SYS_mknod]   {1,{ARG_STR}},
+[SYS_unlink]  {1,{ARG_STR}},
+[SYS_link]    {},
+[SYS_mkdir]   {2,{ARG_STR,ARG_STR}},
+[SYS_close]   {1,{ARG_PTR}},
+[SYS_trace]   {1,{ARG_INT}},
+[SYS_sysinfo] {0,{}}
+};
+
+void
+print_syscall_args(int num,struct trapframe *tf)
+{
+  if(num>=NELEM(syscall_arg_tables))
+    return;
+  struct sysycall_args args = syscall_arg_tables[num];
+  char *seq = "";
+  for(int i=0;i<args.nargs;i++){
+    uint64 val = 0;
+    switch (i)
+    {
+    case 0:val = tf->a0;break;
+    case 1:val = tf->a1;break;
+    case 2:val = tf->a2;break;
+    case 3:val = tf->a3;break;
+    case 4:val = tf->a4;break;
+    case 5:val = tf->a5;break;
+    }
+    printf("%s",seq);
+    seq = "，";
+    switch (args.argtypes[i])
+    {
+    case ARG_INT: printf(" %d ",val);break;
+    case ARG_PTR: printf(" 0x%p ",(void*)val);break;
+    case ARG_STR: {
+      char buf[32];
+        // 安全地从用户空间复制字符串前缀
+        if(copyinstr(myproc()->pagetable, buf, val, sizeof(buf)) >= 0)
+          printf(" \"%s\" ", buf);
+        else
+          printf(" 0x%p ", (void*)val);
+        break;
+    }
+    }
+  }
+}
+//打印参数相关设置（结束）-----
 void
 syscall(void)
 {
   int num;
   struct proc *p = myproc();
 
-  num = p->trapframe->a7;
+  num = p->trapframe->a7;//获取系统调用号
+  //如果系统调用号有效 （大于0且小于syscalls数组程度，并且对应的处理函数存在）
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     p->trapframe->a0 = syscalls[num]();
+    if((p->kama_syscall_trace>>num)&1){
+      printf("%d: syscall %s -> %d  args = ",p->pid,kama_syscall_names[num],p->trapframe->a0);
+      print_syscall_args(num,p->trapframe);
+      printf("\n");
+    }
   } else {
     printf("%d %s: unknown sys call %d\n",
             p->pid, p->name, num);
     p->trapframe->a0 = -1;
   }
 }
+
