@@ -16,13 +16,13 @@ main()
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
-    kinit();         // physical page allocator
+    kinit();         // physical page allocator 物理页面分配器
     kvminit();       // create kernel page table
-    kvminithart();   // turn on paging
+    kvminithart();   // turn on paging 打开寻呼
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector
-    plicinit();      // set up interrupt controller
+    plicinit();      // set up interrupt controller 设置中断控制器
     plicinithart();  // ask PLIC for device interrupts
     binit();         // buffer cache
     iinit();         // inode cache

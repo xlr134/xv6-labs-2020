@@ -30,7 +30,7 @@ trapinithart(void)
 }
 
 //
-// handle an interrupt, exception, or system call from user space.
+// handle an interrupt, exception, or system call from user space.  处理来自用户空间的中断、异常或系统调用。
 // called from trampoline.S
 //
 void
@@ -41,13 +41,13 @@ usertrap(void)
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
+  // send interrupts and exceptions to kerneltrap(), 向kerneltrap（）发送中断和异常
+  // since we're now in the kernel. 因为我们现在在内核中
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
   
-  // save user program counter.
+  // save user program counter. 保存用户程序计数器。
   p->trapframe->epc = r_sepc();
   
   if(r_scause() == 8){
@@ -76,7 +76,7 @@ usertrap(void)
   if(p->killed)
     exit(-1);
 
-  // give up the CPU if this is a timer interrupt.
+  // give up the CPU if this is a timer interrupt.   如果这是定时器中断，则放弃CPU
   if(which_dev == 2)
     yield();
 
@@ -182,7 +182,7 @@ devintr()
      (scause & 0xff) == 9){
     // this is a supervisor external interrupt, via PLIC.
 
-    // irq indicates which device interrupted.
+    // irq indicates which device interrupted.  irq表示哪个设备中断
     int irq = plic_claim();
 
     if(irq == UART0_IRQ){

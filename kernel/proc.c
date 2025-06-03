@@ -600,9 +600,9 @@ wakeup(void *chan)
   }
 }
 
-// Wake up p if it is sleeping in wait(); used by exit().
-// Caller must hold p->lock.
-static void
+// Wake up p if it is sleeping in wait(); used by exit().  唤醒p，如果它正在等待（）；由exit（）使用。
+// Caller must hold p->lock. 呼叫者必须按住p->锁定
+static void 
 wakeup1(struct proc *p)
 {
   if(!holding(&p->lock))
