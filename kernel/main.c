@@ -19,9 +19,9 @@ main()
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
-    kinit();         // physical page allocator
+    kinit();         // physical page allocator  分配物理页  从内核后的第一个地址到PHYSTOP
     kvminit();       // create kernel page table
-    kvminithart();   // turn on paging
+    kvminithart();   // turn on paging 开启分页机制（或启用分页功能）
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector

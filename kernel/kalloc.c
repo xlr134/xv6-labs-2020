@@ -10,9 +10,9 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
-
-extern char end[]; // first address after kernel.
-                   // defined by kernel.ld.
+ 
+extern char end[]; // first address after kernel.内核后的第一个地址
+                   // defined by kernel.ld. 由kernel.ld定义
 
 struct run {
   struct run *next;
@@ -38,6 +38,9 @@ freerange(void *pa_start, void *pa_end)
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
 }
+// 释放虚拟地址 v 指向的物理内存页，
+// 该页通常应由 kalloc () 调用返回。
+// （例外情况是初始化分配器时，见上方的 kinit 函数。）
 
 // Free the page of physical memory pointed at by v,
 // which normally should have been returned by a
@@ -48,10 +51,11 @@ kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP) // 这里的end是内核后的第一个地址
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
+  // Fill with junk to catch dangling refs.  用垃圾数据填充以捕捉悬空引用。
+  // 目的：当程序访问已释放的内存时，读取到的垃圾数据会触发异常（如段错误），便于调试时定位悬空引用问题，属于内存安全检查的常见手段。）
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;

@@ -2,6 +2,9 @@
         # and causes each CPU to jump there.
         # kernel.ld causes the following code to
         # be placed at 0x80000000.
+        #QEMU 模拟器通过-kernel参数将内核加载到物理地址0x80000000
+        #链接脚本kernel.ld将_entry标签定位到该地址
+        #系统启动时，每个 CPU 核心都会跳转到0x80000000开始执行
 .section .text
 _entry:
 	# set up a stack for C.

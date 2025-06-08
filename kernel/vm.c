@@ -11,41 +11,57 @@
  */
 pagetable_t kernel_pagetable;
 
-extern char etext[];  // kernel.ld sets this to end of kernel code.
+extern char etext[];  // kernel.ld sets this to end of kernel code. 内核链接描述文件（kernel.ld）将此设置为内核代码的末尾。
 
 extern char trampoline[]; // trampoline.S
 
+void
+kvm_map_pagetable(pagetable_t pgtbl){
+  // 将各种内核需要的 direct mapping 添加到页表 pgtbl 中
+    
+    // uart registers
+    kvmmap(pgtbl, UART0, UART0, PGSIZE, PTE_R|PTE_W);
+
+    // virtio mmio disk interface
+    kvmmap(pgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+
+    // PLIC
+    kvmmap(pgtbl, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+    // map kernel text executable and read-only.
+    kvmmap(pgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+    // map kernel data and the physical RAM we'll make use of.
+    kvmmap(pgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);//这是内核的数据段
+
+    // map the trampoline for trap entry/exit to
+    // the highest virtual address in the kernel.
+    kvmmap(pgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);// 这部分是否可以理解为  trampoline 在内核代码段时直接映射
+}
+
 /*
- * create a direct-map page table for the kernel.
+ * create a direct-map page table for the kernel. 为内核创建一个直接映射页表
  */
 void
-kvminit()
+kvminit()//为了让其他进程也可以创建独享的内核页表先将原本的kvminit 进行抽象
 {
-  kernel_pagetable = (pagetable_t) kalloc();
-  memset(kernel_pagetable, 0, PGSIZE);
-
-  // uart registers
-  kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
-
-  // virtio mmio disk interface
-  kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-
-  // CLINT
-  kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-
-  // PLIC
-  kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-
-  // map kernel text executable and read-only.
-  kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-
-  // map kernel data and the physical RAM we'll make use of.
-  kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-
-  // map the trampoline for trap entry/exit to
-  // the highest virtual address in the kernel.
-  kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  // 全局内核表仍然使用kvminit 函数初始化
+  kernel_pagetable = kvminit_newpgtbl();
+  // 全局内核表仍需要映射 CLINT
+  kvmmap(kernel_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 }
+// 进行页表初始化映射
+pagetable_t
+kvminit_newpgtbl()
+{
+  pagetable_t pgtbl = (pagetable_t) kalloc();
+  memset(pgtbl,0,PGSIZE);
+
+  kvm_map_pagetable(pgtbl);
+  return pgtbl;
+}
+//实现初始化页表映射函数
 
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
@@ -53,6 +69,20 @@ void
 kvminithart()
 {
   w_satp(MAKE_SATP(kernel_pagetable));
+  /*
+  RISC-V 架构使用 SATP 寄存器控制虚拟地址到物理地址的转换，其格式为：
+    +--------+--------+----------------------+
+    | MODE   | ASID   | PPN                  |
+    | [63:60]| [59:44]| [43:0]               |
+    +--------+--------+----------------------+
+    MODE：分页模式（4 位） 8L 对应二进制 1000，表示 SV39 分页模式（39 位虚拟地址，三级页表）
+    ASID：地址空间标识符（16 位，用于进程上下文切换优化）
+    PPN：页表根地址的物理页号（44 位）  >> 12：右移 12 位，因为物理页号（PPN）忽略页内偏移（低 12 位）
+  */
+ /*
+ TLB 缓存失效：在设置新的 satp 之前，TLB 中可能存在旧的地址映射（如直接映射或无效映射）。
+  强制同步：sfence.vma 确保后续内存访问必须从新的页表（而非 TLB 缓存）获取映射关系，避免使用过时的映射导致错误。
+ */
   sfence_vma();
 }
 
@@ -69,7 +99,7 @@ kvminithart()
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
 pte_t *
-walk(pagetable_t pagetable, uint64 va, int alloc)
+walk(pagetable_t pagetable, uint64 va, int alloc)//前者通过虚拟地址得到 PTE  alloc 布尔标志，指示当发现中间页表不存在时是否动态分配
 {
   if(va >= MAXVA)
     panic("walk");
@@ -79,7 +109,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)// 如果不动态分配则直接返回  每个页表存储在一个页中吗？
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
@@ -114,11 +144,12 @@ walkaddr(pagetable_t pagetable, uint64 va)
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
+// 将某个虚拟地址映射到某个物理地址（添加第一个参数）
 void
-kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
+kvmmap(pagetable_t pgtbl, uint64 va, uint64 pa, uint64 sz, int perm)            
 {
-  if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
-    panic("kvmmap");
+    if(mappages(pgtbl, va, sz, pa, perm) != 0)
+        panic("kvmmap");
 }
 
 // translate a kernel virtual address to
@@ -126,19 +157,19 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 // addresses on the stack.
 // assumes va is page aligned.
 uint64
-kvmpa(uint64 va)
+kvmpa(pagetable_t pgtbl, uint64 va)         
 {
-  uint64 off = va % PGSIZE;
-  pte_t *pte;
-  uint64 pa;
-  
-  pte = walk(kernel_pagetable, va, 0);
-  if(pte == 0)
-    panic("kvmpa");
-  if((*pte & PTE_V) == 0)
-    panic("kvmpa");
-  pa = PTE2PA(*pte);
-  return pa+off;
+    uint64 off = va % PGSIZE;
+    pte_t *pte;
+    uint64 pa;
+
+    pte = walk(pgtbl, va, 0);			//kernel_pagetable改为参数pgtbl
+    if (pte == 0)
+        panic("kvmpa");
+    if ((*pte & PTE_V) == 0)
+        panic("kvmpa");
+    pa = PTE2PA(*pte);
+    return pa + off;
 }
 
 // Create PTEs for virtual addresses starting at va that refer to
@@ -146,7 +177,7 @@ kvmpa(uint64 va)
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
 int
-mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm) //将虚拟地址映射到物理地址 其中perm映射访问权限标志
 {
   uint64 a, last;
   pte_t *pte;
@@ -154,11 +185,11 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
-    if((pte = walk(pagetable, a, 1)) == 0)
+    if((pte = walk(pagetable, a, 1)) == 0)  //walk() 函数递归查找页表，返回虚拟地址 a 对应的页表项（PTE）指针。  1表示没有对应的页表项则申请
       return -1;
     if(*pte & PTE_V)
       panic("remap");
-    *pte = PA2PTE(pa) | perm | PTE_V;
+    *pte = PA2PTE(pa) | perm | PTE_V; 
     if(a == last)
       break;
     a += PGSIZE;
@@ -170,6 +201,9 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
+// 从虚拟地址 va 开始移除 npages 个页面映射。
+// va 必须是页面对齐的，且映射必须存在。
+// 可选择释放对应的物理内存。
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
@@ -184,13 +218,13 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
       panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
+    if(PTE_FLAGS(*pte) == PTE_V)// 说明是中间页表
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
-    *pte = 0;
+    *pte = 0;// 更改第三级页表项的内容
   }
 }
 
@@ -225,6 +259,7 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
+// 为进程从旧大小oldsz扩展到新大小newsz分配页表项（PTE）和物理内存，新大小无需按页对齐。返回新大小，出错时返回 0。
 uint64
 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
@@ -337,6 +372,9 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
+
+// 将一个页表项（PTE）标记为用户不可访问。
+// 由exec函数用于设置用户栈的保护页。
 void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
@@ -352,7 +390,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
 int
-copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)// 从内核到用户复制数据
 {
   uint64 n, va0, pa0;
 
@@ -378,24 +416,25 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 // Return 0 on success, -1 on error.
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
-{
-  uint64 n, va0, pa0;
+{ //不需要软件的地址翻译
+  // uint64 n, va0, pa0;
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+  // while(len > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > len)
+  //     n = len;
+  //   memmove(dst, (void *)(pa0 + (srcva - va0)), n);
 
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  //   len -= n;
+  //   dst += n;
+  //   srcva = va0 + PGSIZE;
+  // }
+  // return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -404,39 +443,113 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 // Return 0 on success, -1 on error.
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
-{
-  uint64 n, va0, pa0;
-  int got_null = 0;
+{//不需要软件的地址翻译
+  // uint64 n, va0, pa0;
+  // int got_null = 0;
 
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
+  // while(got_null == 0 && max > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > max)
+  //     n = max;
 
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
+  //   char *p = (char *) (pa0 + (srcva - va0));
+  //   while(n > 0){
+  //     if(*p == '\0'){
+  //       *dst = '\0';
+  //       got_null = 1;
+  //       break;
+  //     } else {
+  //       *dst = *p;
+  //     }
+  //     --n;
+  //     --max;
+  //     p++;
+  //     dst++;
+  //   }
+
+  //   srcva = va0 + PGSIZE;
+  // }
+  // if(got_null){
+  //   return 0;
+  // } else {
+  //   return -1;
+  // }
+  return copyinstr_new(pagetable, dst, srcva, max);
+}
+
+// 递归打印页表
+
+int pgtblprint(pagetable_t pagetable,int depth){
+  for(int i=0;i<521;i++){
+    pte_t pte = pagetable[i];
+    if(pte&PTE_V){
+      printf("..");
+      for(int j=0;j<depth;++j) 
+        printf(" ..");
+      printf("%d:pte %p pa %p\n",i,pte,PTE2PA(pte)); //%p 是以16进制的形式输出
+
+      //如果该节点不是叶子节点，递归打印子节点
+      if((pte&(PTE_R|PTE_W|PTE_X))==0){
+        uint64 child = PTE2PA(pte);
+        pgtblprint((pagetable_t)child,depth+1);
       }
-      --n;
-      --max;
-      p++;
-      dst++;
     }
+  }
+  return 0;
+}
 
-    srcva = va0 + PGSIZE;
+//打印页表
+int vmprint(pagetable_t pagetable){
+  printf("page table %p\n",pagetable);
+  return pgtblprint(pagetable,0);
+}
+//递归释放一个内核页表中的所有映射，但是不释放其指向的物理页
+void
+kvm_free_kernelpgtbl(pagetable_t pagetable) {
+    for (int i = 0;i < 512;++i) {
+        pte_t pte = pagetable[i];
+        uint64 child = PTE2PA(pte);
+        if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {      // 如果该页表项指向更低一级的页表
+            kvm_free_kernelpgtbl((pagetable_t)child);                     // 递归释放低一级页表及其页表项
+            pagetable[i] = 0;
+        }
+    }
+    kfree((void*)pagetable);        // 释放当前级别页表所占用空间
+}
+
+int 
+kvmcopymappings(pagetable_t src,pagetable_t dst,uint64 start ,uint64 sz){
+  pte_t * pte;
+  uint64 pa,i;
+  uint flags;
+  for(i = PGROUNDUP(start);i<start+sz;i+=PGSIZE){
+    if((pte=walk(src,i,0))==0)
+      panic("kvmcopymappings: pte should exist");
+    if((*pte&PTE_V)==0)
+      panic("kvmcopymappings: page not present");
+    pa = PTE2PA(*pte);
+
+    flags = PTE_FLAGS(*pte) &~PTE_U;// 确保当前是非用户态  内核态不能够访问用户态的页面
+  if(mappages(dst,i,PGSIZE,pa,flags)==0)
+    goto err;  
   }
-  if(got_null){
-    return 0;
-  } else {
+  return 0;
+  err:
+    uvmunmap(dst,PGROUNDUP(start),(i-PGROUNDUP(start))/PGSIZE,0);
     return -1;
+}
+
+uint64 
+kvmdealloc(pagetable_t pagetable,uint64 oldsz,uint64 newsz){
+  if(newsz>=oldsz)
+    return oldsz;
+  if(PGROUNDUP(newsz)<PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz))/PGSIZE;
+    uvmunmap(pagetable,PGROUNDUP(newsz),npages,0);
   }
+  return newsz;
 }

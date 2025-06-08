@@ -1,45 +1,180 @@
-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+待解决：
+    跳板函数的二级映射如何理解呢？
+        kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);// 这里并没有体现出来二级映射
+    sfence_vma() 为何刷新块表  对块表中的内容有何影响
+        解决：更新原始页表后以前的页表缓存就会失效了
+    
+        场景	         触发时机	                    刷新前的页表	    刷新后的页表	  目的
+        内核初始化	kvminithart 中设置内核页表后	  可能是直接映射或空映射	内核页表	确保内核代码和数据的正确映射
+        返回用户空间	trampoline 代码切换到用户页表后	     内核页表	        用户页表	确保用户只能访问其授权的内存区域
 
-ACKNOWLEDGMENTS
+与现有操作系统的不同点：
+    xv6的栈只有一页，超过之后会访问保护页，从而是发生缺页异常。
 
-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
-2000)). See also https://pdos.csail.mit.edu/6.828/, which
-provides pointers to on-line resources for v6.
+实验：
+    1、打印页表（简单）
+    2、每个进程一个内核页表（a kernel page table per process） 
+        共享内核页表的缺点：
 
-The following people have made contributions: Russ Cox (context switching,
-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
-Clements.
+            进程可能会意外或恶意地访问其他进程的内核数据。如果一个进程因为bug或恶意操作访问了内核中的敏感数据，它可能会影响其他进程或系统的整体稳定性。
+            （有自己的内核页表后，在内核页表中仅仅有自己的内核栈的映射，并且每个进程在内核状态特有的数据，其他进程在内核状态下是无法访问的，因为其他进程不能够访问当前进程所持有
+             物理内存）
 
-We are also grateful for the bug reports and patches contributed by
-Silas Boyd-Wickizer, Anton Burtsev, Dan Cross, Cody Cutler, Mike CAT,
-Tej Chajed, Asami Doi, eyalz800, , Nelson Elhage, Saar Ettinger, Alice
-Ferrazzi, Nathaniel Filardo, Peter Froehlich, Yakir Goaron,Shivam
-Handa, Bryan Henry, jaichenhengjie, Jim Huang, Alexander Kapshuk,
-Anders Kaseorg, kehao95, Wolfgang Keller, Jonathan Kimmitt, Eddie
-Kohler, Austin Liew, Imbar Marinescu, Yandong Mao, Matan Shabtay,
-Hitoshi Mitake, Carmi Merimovich, Mark Morrissey, mtasm, Joel Nider,
-Greg Price, Ayan Shafqat, Eldar Sehayek, Yongming Shen, Fumiya
-Shigemitsu, Takahiro, Cam Tenny, tyfkda, Rafael Ubal, Warren Toomey,
-Stephen Tu, Pablo Ventura, Xi Wang, Keiichi Watanabe, Nicolas
-Wolovick, wxdao, Grant Wu, Jindong Zhang, Icenowy Zheng, and Zou Chang
-Wei.
+            每次创建或删除进程时，都需要小心更新共享的页表条目，以确保不同进程之间的内存不会冲突或被错误覆盖。这会增加系统的复杂性，并且在多核系统中，这种全局共享的管理会增加同步开销和冲突的可能性。
+            如果每个进程进入内核态之后，都能有自己独立的内核页表，可以避免很多麻烦。（进程结束后只需要把自己的页表项所占内存释放掉，并不会影响其他进程的内核状态，只释放自己所持有的页表）
 
-The code in the files that constitute xv6 is
-Copyright 2006-2020 Frans Kaashoek, Robert Morris, and Russ Cox.
+            （注意释放页表只释放实际页表项，而不释放实际内核的物理页）
 
-ERROR REPORTS
+    3、简化copyin/copystr
+        将用户态的页表复制到内核态的页表。这样使得内核态也可以对用户态传进来的指针（逻辑地址）进行解引用。原来的copyin函数通过软件模拟访问页表的过程获取物理地址的，而在内核页表内维护映
+        射副本的话，可以利用CPU的硬件寻址功能进行寻址，效率更高并且可以通过快表加速。要实现这样的效果，我们需要在每一处内核对用户页表进行修改的时候，将同样的修改也同步应用在进程的内核页表上，
+        使得两个页表的程序段（0到PLIC段）地址空间的映射同步。
 
-Please send errors and suggestions to Frans Kaashoek and Robert Morris
-(kaashoek,rtm@mit.edu). The main purpose of xv6 is as a teaching
-operating system for MIT's 6.S081, so we are more interested in
-simplifications and clarifications than new features.
+        注意：
+            1、将用户态页设置为 ~PTE_U，因为内核态不能够访问PTE_U类型的页面。
+            2、在xv6内核中，用于映射程序内存的地址范围是[0,PLIC) 所以确保程序所占的空间不要超过PLIC
 
-BUILDING AND RUNNING XV6
+        stap寄存器介绍
+            //SATP（Supervisor Address Translation and Protection）寄存器
+            // SATP 寄存器的结构
+            //  +--------+----------------+--------------------------------+
+            //  |  63..60    |  59..44        |  43..0                     |
+            //  +--------+----------------+--------------------------------+
+            //  | MODE   | ASID (Address  | PPN (Physical Page Number)     |
+            //  |        | Space ID)      |                                |
+            //  +--------+----------------+--------------------------------+
+            //MODE（位 63）：
+            //控制地址转换和保护的模式：
+            // 0：直接模式（Direct mode），禁用分页，虚拟地址直接映射到物理地址。
+            // 8：Sv39 模式（9 位 ×3 级页表，支持 512GB 内存）。
+            // 9：Sv48 模式（9 位 ×4 级页表，支持 256TB 内存）。
+            //ASID 表示进程地址空间标识符，用于优化 TLB；
+            //PPN 存的是根页表所在的物理页号。这样，给定一个虚拟页号，CPU 就可以从三级页表的根页表开始一步步的将其映射到一个物理页号。
+            // SATP 寄存器的作用
+            // 启用分页：
+            //   将 MODE 字段设置为非零值（如 8 或 9），并写入 SATP 寄存器，即可启用虚拟地址到物理地址的转换。
+            //   此时，CPU 会使用 PPN 指向的页表进行地址翻译。
+            // 页表基址：
+            //   PPN 字段存储根页表的物理地址，CPU 从这里开始遍历多级页表。
+            // 上下文切换：
+            //   进程切换时，操作系统通常会更新 SATP 寄存器，指向新进程的页表，并可能更改 ASID 以标识不同的地址空间。
+        设置好satp寄存器后，cpu硬件会自动实验PPN指向的跟页表进行地址翻译（mmu 内存管理单元），可以自动将虚拟地址转换为物理地址，而内核只需确保页表正确设置即可（内核只是设置页表的）。
 
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu. Once they are installed, and in your shell
-search path, you can run "make qemu".
+        避免了使用软件进行地址翻译：
+            原始的copyin：
+            int
+            copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+            { //不需要软件的地址翻译
+            uint64 n, va0, pa0;
+
+            while(len > 0){
+                va0 = PGROUNDDOWN(srcva);
+                pa0 = walkaddr(pagetable, va0);
+                if(pa0 == 0)
+                return -1;
+                n = PGSIZE - (srcva - va0);
+                if(n > len)
+                n = len;
+                memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+
+                len -= n;
+                dst += n;
+                srcva = va0 + PGSIZE;
+            }
+            return 0;
+            }
+        内核页表可以访问用户页表后的更改代码：
+            int
+            copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+            { 
+            return copyin_new(pagetable, dst, srcva, len);
+            }
+            下面的函数由mmu（内存管理单元）进行地址翻译
+            int
+            copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+            {
+            struct proc *p = myproc();
+
+            if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
+                return -1;
+            memmove((void *) dst, (void *)srcva, len);
+            stats.ncopyin++;   // XXX lock
+            return 0;
+            }
+                
+    1.为什么要合并页表?
+        硬件mmu只能解析一个页表，当程序处于内核态时，mmu解析内核态页表，若此时想要访问用户态页
+        表(比如访问一个用户态传入的指针)，就没法通过硬件mmu来解析，只能通过软件方法进行解析，
+        但软件方法的性能远低于硬件，故通过合并页表来使得该场景下仍可以使用硬件mmu，进而提高性
+        能
+    2、虚拟内存有什么好处
+        内存隔离
+        更大的地址空间
+        内存映射和文件共享
+            虚拟内存允许将文件映射到进程的地址空间中，这样可以轻松地读取和写入文件，而无需繁琐的文件操作。多个进程还可以共享同一个文件的虚拟内存副本，以实现高效的文件共享。
+            
+            内存映射
+                定义：将文件内容直接映射到进程的虚拟地址空间，使进程可以像访问内存一样读写文件，无需显式调用read()/write()系统。
+                原理：操作系统在进程的页表中创建映射关系，将虚拟地址范围与文件的物理磁盘块关联。当进程访问这些虚拟地址时，触发缺页异常，操作系统从磁盘加载对应文件内容到物理内存。
+            为什么需要内存映射？
+                传统文件操作流程：
+                磁盘 → 内核缓冲区 → 用户空间缓冲区（两次数据拷贝，效率低）
+            内存映射流程：
+                磁盘 → 物理内存（由虚拟内存自动管理）（一次拷贝，直接通过虚拟地址访问）
+            内存映射的系统调用接口
+                使用mmap()函数创建映射：void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
+            页表与文件的关联
+                操作系统为进程创建页表项，将虚拟地址映射到文件的物理磁盘块。
+                当进程首次访问映射的虚拟地址时，触发缺页异常，操作系统将对应文件块加载到物理内存。
+                修改映射内存时，操作系统会标记对应页为 “脏页”，并在适当时候将数据写回磁盘（由msync()或系统自动完成）。
+            示例代码：
+                #include <stdio.h>
+                #include <stdlib.h>
+                #include <fcntl.h>
+                #include <unistd.h>
+                #include <sys/mman.h>
+
+                int main() {
+                    // 打开文件
+                    int fd = open("example.txt", O_RDWR | O_CREAT, 0666);
+                    if (fd == -1) {
+                        perror("open");
+                        return 1;
+                    }
+
+                    // 扩展文件大小
+                    lseek(fd, 1023, SEEK_SET);
+                    write(fd, "", 1);
+
+                    // 创建内存映射
+                    char *map = mmap(NULL, 1024, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                    if (map == MAP_FAILED) {
+                        perror("mmap");
+                        close(fd);
+                        return 1;
+                    }
+
+                    // 像操作内存一样写文件
+                    sprintf(map, "Hello, memory-mapped file!\n");
+
+                    // 同步到磁盘
+                    msync(map, 1024, MS_SYNC);
+
+                    // 解除映射
+                    munmap(map, 1024);
+                    close(fd);
+
+                    return 0;
+                }
+    3、能使用磁盘交换的前提是什么？
+        磁盘交换的触发条件：当进程访问的虚拟地址对应的页不在内存中时，
+        操作系统通过缺页故障机制感知这一情况，并触发从磁盘（如交换空间 /swap 分区）读取该页数据到内存的过程。
+    在 Linux 系统中，线程栈的大小默认是固定的，但可以通过编程或系统配置进行调整。以下是详细说明：
+        一、默认栈大小（和堆不同）
+        主线程（进程）的栈
+        由ulimit命令控制，默认值通常为 8 MB（可通过 ulimit -s 查看）。
+        可通过 ulimit -s [size] 临时修改（仅对当前 shell 进程有效），或修改系统配置文件（如 /etc/security/limits.conf）永久调整。
+        POSIX 线程（pthreads）的栈
+        默认大小由 PTHREAD_STACK_MIN 定义（通常为 8 KB 或 64 KB，具体取决于系统），但实际分配的栈空间可能更大。
+        大多数情况下，线程栈的默认大小由 系统或 glibc 动态决定，通常与主线程栈的默认值接近（例如 8 MB），但可通过 pthread_attr_setstacksize 函数自定义。
+    在xv6中栈也是固定大小的，但是xv6不支持多线程。

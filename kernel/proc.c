@@ -3,9 +3,8 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
-#include "proc.h"
 #include "defs.h"
-
+#include "proc.h"
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -23,7 +22,7 @@ extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
 void
-procinit(void)
+procinit(void)//为每个进程分配一个内核栈
 {
   struct proc *p;
   
@@ -34,14 +33,15 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
+       // 注释掉了上面的代码（为所有进程预分配内核栈的代码），变为创建进程的时候再创建内核栈
   }
-  kvminithart();
+  kvminithart();//刷新快表
 }
 
 // Must be called with interrupts disabled,
@@ -120,6 +120,14 @@ found:
     release(&p->lock);
     return 0;
   }
+  // 为新进程创建独立的内核页表，并将内核所需要的各种映射添加到新页表上
+  p->kernelpgtbl = kvminit_newpgtbl();
+  char *pa = kalloc();
+  if(pa==0)
+    panic("kalloc");
+  uint64 va = KSTACK((int)0);//将内核栈映射到固定的逻辑地址上
+  kvmmap(p->kernelpgtbl,va,(uint64)pa,PGSIZE,PTE_R|PTE_W);
+  p->kstack = va;//记录内核栈的虚拟地址
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -150,6 +158,19 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  // 释放进程的内核栈
+  void* ktsack_pa = (void*)kvmpa(p->kernelpgtbl,p->kstack);
+  kfree(ktsack_pa);
+  p->kstack = 0;
+
+  // 不能使用 proc_freepagetable释放页表，因为其不仅会释放页表本身，还会把页表内所有的叶节点对应的物理页也释放掉。
+    // 这会导致内核运行所需要的关键物理页被释放，造成内核崩溃。
+    
+  // 递归释放进程独享的页表，释放页表本身所占用的空间，但不释放页表指向的物理页
+  kvm_free_kernelpgtbl(p->kernelpgtbl);
+  p->kernelpgtbl = 0;
+  p->state = UNUSED;
 }
 
 // Create a user page table for a given process,
@@ -168,6 +189,9 @@ proc_pagetable(struct proc *p)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
   // to/from user space, so not PTE_U.
+  // 将（用于系统调用返回的） trampoline（跳板）代码映射到最高用户虚拟地址处
+// 仅 Supervisor（用户/ 监管者）模式在往返用户空间时使用该区域，因此不设置 PTE_U 标志
+
   if(mappages(pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
     uvmfree(pagetable, 0);
@@ -220,7 +244,8 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
-
+  //同步程序内存映射到进程内核页表中
+  kvmcopymappings(p->pagetable,p->kernelpgtbl,0,p->sz);
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -243,11 +268,19 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+    uint64 newsz;
+    if((newsz = uvmalloc(p->pagetable, sz, sz + n)) == 0) 
+      return -1;
+      //内核页表同步扩大
+    if(kvmcopymappings(p->pagetable,p->kernelpgtbl,sz,n)!=0){
+      uvmdealloc(p->pagetable,newsz,sz);
       return -1;
     }
+    sz = newsz;
   } else if(n < 0){
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uvmdealloc(p->pagetable, sz, sz + n);
+    // 同步缩小
+    sz = kvmdealloc(p->kernelpgtbl,sz,sz+n);
   }
   p->sz = sz;
   return 0;
@@ -268,7 +301,8 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0 ||
+    kvmcopymappings(np->pagetable,np->kernelpgtbl,0,p->sz)<0){
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -473,7 +507,19 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        //切换到进程独立的内核页表
+        w_satp(MAKE_SATP(p->kernelpgtbl));
+        sfence_vma();// 清除快表缓存，刷新TLB缓存，以确保地址转换表的更改生效
+        //调度，执行进程
         swtch(&c->context, &p->context);
+        
+        // 切换回全局内核页表  为什么要切换回全局内核页表
+        /*
+        swtch()调用后：控制权转移到进程p的内核代码（如forkret()或usertrapret()）。
+        进程p返回用户态前：会通过w_satp()设置用户页表（而非全局内核页表）。
+        kvminithart()的真正调用时机：在进程退出或主动让出 CPU（如yield()）时，由调度器执行。
+        */
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

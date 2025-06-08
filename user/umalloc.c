@@ -68,19 +68,19 @@ malloc(uint nbytes)
 
   nunits = (nbytes + sizeof(Header) - 1)/sizeof(Header) + 1;
   if((prevp = freep) == 0){
-    base.s.ptr = freep = prevp = &base;
     base.s.size = 0;
+    base.s.ptr = freep = prevp = &base;
   }
   for(p = prevp->s.ptr; ; prevp = p, p = p->s.ptr){
     if(p->s.size >= nunits){
       if(p->s.size == nunits)
-        prevp->s.ptr = p->s.ptr;
+        prevp->s.ptr = p->s.ptr;//从空闲链表中删除
       else {
         p->s.size -= nunits;
         p += p->s.size;
         p->s.size = nunits;
       }
-      freep = prevp;
+      freep = prevp;//更新下一次搜索起点
       return (void*)(p + 1);
     }
     if(p == freep)

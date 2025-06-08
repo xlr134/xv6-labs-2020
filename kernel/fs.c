@@ -452,6 +452,11 @@ stati(struct inode *ip, struct stat *st)
 // Caller must hold ip->lock.
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
+
+// 从inode读取数据
+// 调用者必须持有ip->lock
+// 如果user_dst==1，则dst是用户虚拟地址
+// 否则，dst是内核地址
 int
 readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 {
@@ -628,9 +633,9 @@ namex(char *path, int nameiparent, char *name)
   struct inode *ip, *next;
 
   if(*path == '/')
-    ip = iget(ROOTDEV, ROOTINO);
+    ip = iget(ROOTDEV, ROOTINO);//从根目录开始
   else
-    ip = idup(myproc()->cwd);
+    ip = idup(myproc()->cwd);// 从当前工作目录开始
 
   while((path = skipelem(path, name)) != 0){
     ilock(ip);

@@ -182,7 +182,7 @@ w_mtvec(uint64 x)
 }
 
 // use riscv's sv39 page table scheme.
-#define SATP_SV39 (8L << 60)
+#define SATP_SV39 (8L << 60)  //设置 SATP 寄存器的 MODE 字段为 SV39 模式
 
 #define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12))
 
@@ -191,7 +191,34 @@ w_mtvec(uint64 x)
 static inline void 
 w_satp(uint64 x)
 {
-  asm volatile("csrw satp, %0" : : "r" (x));
+  asm volatile("csrw satp, %0" : : "r" (x));//这段代码是使用 GCC 内联汇编语法实现的汇编指令操作，用于将寄存器值写入 RISC-V 架构的 SATP 寄存器
+  //GCC 关键字，表示这是一段内联汇编代码
+  //volatile：告诉编译器不要优化这段代码，确保每次都真实执行
+
+  //SATP（Supervisor Address Translation and Protection）寄存器
+  // SATP 寄存器的结构
+  //  +--------+----------------+--------------------------------+
+  //  |  63..60    |  59..44        |  43..0                     |
+  //  +--------+----------------+--------------------------------+
+  //  | MODE   | ASID (Address  | PPN (Physical Page Number)     |
+  //  |        | Space ID)      |                                |
+  //  +--------+----------------+--------------------------------+
+  //MODE（位 63）：
+  //控制地址转换和保护的模式：
+  // 0：直接模式（Direct mode），禁用分页，虚拟地址直接映射到物理地址。
+  // 8：Sv39 模式（9 位 ×3 级页表，支持 512GB 内存）。
+  // 9：Sv48 模式（9 位 ×4 级页表，支持 256TB 内存）。
+  //ASID 表示进程地址空间标识符，用于优化 TLB；
+  //PPN 存的是根页表所在的物理页号。这样，给定一个虚拟页号，CPU 就可以从三级页表的根页表开始一步步的将其映射到一个物理页号。
+  // SATP 寄存器的作用
+  // 启用分页：
+  //   将 MODE 字段设置为非零值（如 8 或 9），并写入 SATP 寄存器，即可启用虚拟地址到物理地址的转换。
+  //   此时，CPU 会使用 PPN 指向的页表进行地址翻译。
+  // 页表基址：
+  //   PPN 字段存储根页表的物理地址，CPU 从这里开始遍历多级页表。
+  // 上下文切换：
+  //   进程切换时，操作系统通常会更新 SATP 寄存器，指向新进程的页表，并可能更改 ASID 以标识不同的地址空间。
+
 }
 
 static inline uint64
@@ -315,7 +342,7 @@ r_ra()
 static inline void
 sfence_vma()
 {
-  // the zero, zero means flush all TLB entries.
+  // the zero, zero means flush all TLB entries. 这段代码是 RISC-V 架构下的汇编指令，用于刷新地址转换缓存（TLB），确保虚拟地址到物理地址的映射更新生效。
   asm volatile("sfence.vma zero, zero");
 }
 
@@ -324,13 +351,13 @@ sfence_vma()
 #define PGSHIFT 12  // bits of offset within a page
 
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
-#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))//Page Ground DOWN
 
-#define PTE_V (1L << 0) // valid
-#define PTE_R (1L << 1)
-#define PTE_W (1L << 2)
-#define PTE_X (1L << 3)
-#define PTE_U (1L << 4) // 1 -> user can access
+#define PTE_V (1L << 0) // valid  PTE是否存在
+#define PTE_R (1L << 1) // 是否允许读取该页
+#define PTE_W (1L << 2) // 控制是否允许指令向该页写入
+#define PTE_X (1L << 3) // 控制cpu是否可以将页面的内容解释为指令并执行
+#define PTE_U (1L << 4) // 控制是否允许用户态下的指令访问该页 如不设置 则只能再内核态下使用
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
@@ -348,7 +375,10 @@ sfence_vma()
 // MAXVA is actually one bit less than the max allowed by
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
-#define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
+// 位于最高可能虚拟地址之后的一个地址。
+// MAXVA 实际上比 Sv39 允许的最大值小一位，
+// 这样可以避免对设置了最高位的虚拟地址进行符号扩展。
+#define MAXVA (1L << (9 + 9 + 9 + 12 - 1))  //为什么减1
 
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
