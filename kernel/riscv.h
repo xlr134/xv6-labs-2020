@@ -348,6 +348,8 @@ sfence_vma()
 
 
 #define PGSIZE 4096 // bytes per page
+#define SUPERPAGESIZE 0x200000  //2MB的超级页
+#define SUPERPAGE_SHIFT 21 //2MB页的偏移量
 #define PGSHIFT 12  // bits of offset within a page
 
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
@@ -358,6 +360,7 @@ sfence_vma()
 #define PTE_W (1L << 2) // 控制是否允许指令向该页写入
 #define PTE_X (1L << 3) // 控制cpu是否可以将页面的内容解释为指令并执行
 #define PTE_U (1L << 4) // 控制是否允许用户态下的指令访问该页 如不设置 则只能再内核态下使用
+#define PTE_S (1L << 5) // 页大小标志
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)

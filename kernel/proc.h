@@ -104,6 +104,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  pagetable_t kernelpgtbl;  //存储内核共享的内核态页表
+  pagetable_t kernelpgtbl;     //存储内核共享的内核态页表
+  int use_superpages;          //是否为该进程使用超级页
 
 };
