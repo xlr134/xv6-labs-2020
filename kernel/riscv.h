@@ -51,6 +51,13 @@ r_sstatus()
 {
   uint64 x;
   asm volatile("csrr %0, sstatus" : "=r" (x) );
+  //通过内联汇编读取sstatus寄存器的值，并将其存储到 C 语言变量x中
+  // sstatus寄存器是 RISC-V 架构中用于控制和记录处理器状态的关键寄存器，包含以下重要字段：
+    // SIE（Supervisor Interrupt Enable）：控制是否允许 supervisor 模式下的中断。
+    // SPIE（Previous Supervisor Interrupt Enable）：记录进入当前模式前的中断状态，用于从中断返回时恢复。
+    // SPP（Supervisor Previous Privilege）：记录进入当前模式前的特权级别，用于从中断返回时恢复。
+    // 其他标志位：如 UPIE（User Previous Interrupt Enable）、FS（浮点状态）等。
+
   return x;
 }
 
@@ -134,6 +141,13 @@ r_medeleg()
 {
   uint64 x;
   asm volatile("csrr %0, medeleg" : "=r" (x) );
+  //sepc（Supervisor Exception Program Counter）是 RISC-V 架构中的一个控制状态寄存器（CSR），用于存储异常发生时的程序计数器（PC）值
+  // 异常上下文保存
+  //   当处理器执行到异常指令（如系统调用ecall、页错误、非法指令等）时，硬件会自动将下一条待执行指令的地址保存到sepc中。例如：
+  //   对于ecall指令，sepc保存的是ecall的下一条指令地址。
+  //   对于页错误，sepc保存的是触发错误的指令地址。
+  // 异常返回依据
+  //   异常处理完成后，通过mret/sret指令（从异常返回），处理器会从sepc中恢复 PC 值，继续执行被中断的代码。
   return x;
 }
 
@@ -163,7 +177,7 @@ w_mideleg(uint64 x)
 static inline void 
 w_stvec(uint64 x)
 {
-  asm volatile("csrw stvec, %0" : : "r" (x));
+  asm volatile("csrw stvec, %0" : : "r" (x));//stvec 寄存器存放的是异常处理程序的起始地址（即代码指针）。当 RISC-V 处理器遇到异常或中断时，会自动跳转到该地址执行处理逻辑。
 }
 
 static inline uint64
@@ -221,7 +235,34 @@ r_scause()
 {
   uint64 x;
   asm volatile("csrr %0, scause" : "=r" (x) );
-  return x;
+  //scause（Supervisor Cause Register）是 RISC-V 架构中的一个控制状态寄存器（CSR），用于存储最近一次异常或中断的原因。
+    // 功能：存储最近一次异常或中断的原因代码（64 位寄存器）。
+    // 格式：
+    // 最高位（bit 63）：0 表示同步异常（如非法指令），1 表示异步中断。
+    // 低位（bits 0-62）：具体的异常或中断编号。
+    // 同步异常（Synchronous Exception）   
+        //由当前执行的指令直接触发，与指令执行严格同步。
+        //异常发生时，处理器必须等待当前指令执行完成或被取消后才能响应。
+        // 触发原因
+        //   非法指令：例如执行未定义的操作码。
+        //   除零错误：执行除法时除数为零。
+        //   页错误（Page Fault）：访问未映射的内存地址。
+        //   断点指令（如调试时的 breakpoint）。
+        // 特点
+          // 确定性：每次执行相同指令序列时，异常必然在同一位置发生。
+          // 与程序逻辑相关：通常由程序本身的错误或特定操作触发。
+    //异步中断（Asynchronous Interrupt）
+    //定义:由外部事件触发，与当前执行的指令无关，可能在任何指令执行期间随机发生。处理器在指令边界（如一条指令执行完毕）检测并响应中断。
+    // 触发原因
+    //   硬件设备请求：例如：
+    //     定时器中断（Timer Interrupt）：时钟周期结束时触发。
+    //     键盘输入、鼠标移动、网络数据包到达。
+    //     磁盘读写完成。
+    //     外部信号：例如操作系统向进程发送的 SIGTERM 信号。
+    //   特点
+    //     随机性：无法预测中断发生的具体时刻。
+    //     与程序逻辑无关：中断由外部设备或系统事件触发，与当前执行的代码无直接关联。
+      return x;
 }
 
 // Supervisor Trap Value
@@ -271,9 +312,9 @@ intr_off()
   w_sstatus(r_sstatus() & ~SSTATUS_SIE);
 }
 
-// are device interrupts enabled?
+// are device interrupts enabled? // 设备中断是否已启用？
 static inline int
-intr_get()
+intr_get()//interrupt 中断
 {
   uint64 x = r_sstatus();
   return (x & SSTATUS_SIE) != 0;
@@ -319,6 +360,12 @@ sfence_vma()
   asm volatile("sfence.vma zero, zero");
 }
 
+static inline uint64
+r_fp(){
+  uint64 x;
+  asm volatile("mv %0, fp" : "=r" (x) );//将当前函数的帧指针寄存器fp的值读取到 C 变量x中
+  return x;
+}
 
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page

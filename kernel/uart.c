@@ -176,6 +176,11 @@ uartgetc(void)
 // handle a uart interrupt, raised because input has
 // arrived, or the uart is ready for more output, or
 // both. called from trap.c.
+// 处理 UART 中断（由 trap.c 调用）。
+// 触发原因可能是：
+// 1. 接收到新的输入数据
+// 2. UART 已准备好发送更多输出数据
+// 3. 同时发生上述两种情况
 void
 uartintr(void)
 {

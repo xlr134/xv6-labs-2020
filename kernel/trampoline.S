@@ -26,9 +26,21 @@ uservec:
         
 	# swap a0 and sscratch
         # so that a0 is TRAPFRAME
+
+        # trap.c 文件将 stvec（ supervisor 模式陷阱向量表基址寄存器）设置为指向此处，因此
+        # 来自用户空间的陷阱（异常/中断）会从这里开始处理，
+        # 此时处于 supervisor 模式，但使用的是用户空间的页表。
+
+        # sscratch 寄存器指向进程的 p->trapframe（陷阱帧）在用户空间的映射位置，
+        # 该位置对应 TRAPFRAME 地址。
+
+        # 交换 a0 寄存器和 sscratch 寄存器的值
+        # 使 a0 寄存器存储 TRAPFRAME 地址
+
+
         csrrw a0, sscratch, a0
 
-        # save the user registers in TRAPFRAME
+        # save the user registers in TRAPFRAME sd：RISC-V 的双字存储指令（Store Doubleword），用于将 64 位数据从寄存器写入内存。  ra：源操作数 40(a0)：目标内存地址
         sd ra, 40(a0)
         sd sp, 48(a0)
         sd gp, 56(a0)
@@ -60,25 +72,26 @@ uservec:
         sd t5, 272(a0)
         sd t6, 280(a0)
 
-	# save the user a0 in p->trapframe->a0
+	# save the user a0 in p->trapframe->a0      用于读取 **sscratch寄存器 ** 的值到通用寄存器t0中
         csrr t0, sscratch
         sd t0, 112(a0)
 
-        # restore kernel stack pointer from p->trapframe->kernel_sp
+        # restore kernel stack pointer from p->trapframe->kernel_sp 切换到内核栈   ld 用于从内存中加载数据到栈指针寄存器sp
         ld sp, 8(a0)
 
-        # make tp hold the current hartid, from p->trapframe->kernel_hartid
+        # make tp hold the current hartid, from p->trapframe->kernel_hartid  
+        # 使 tp 寄存器保存当前处理器核心ID（hartid），该值来自进程陷阱帧（p->trapframe）中的 kernel_hartid 字段
         ld tp, 32(a0)
 
         # load the address of usertrap(), p->trapframe->kernel_trap
         ld t0, 16(a0)
 
-        # restore kernel page table from p->trapframe->kernel_satp
+        # restore kernel page table from p->trapframe->kernel_satp 加载内核页表并刷新TLB  RISC-V 的控制状态寄存器（CSR）指令（如csrw、csrr、csrrw等）只能使用通用寄存器作为操作数
         ld t1, 0(a0)
         csrw satp, t1
         sfence.vma zero, zero
 
-        # a0 is no longer valid, since the kernel page
+        # a0 is no longer valid, since the kernel page  跳转到 C 语言陷阱处理函数
         # table does not specially map p->tf.
 
         # jump to usertrap(), which does not return
@@ -92,7 +105,7 @@ userret:
         # a0: TRAPFRAME, in user page table.
         # a1: user page table, for satp.
 
-        # switch to the user page table.
+        # switch to the user page table.  切换到用户页表
         csrw satp, a1
         sfence.vma zero, zero
 
@@ -133,8 +146,8 @@ userret:
         ld t5, 272(a0)
         ld t6, 280(a0)
 
-	# restore user a0, and save TRAPFRAME in sscratch
-        csrrw a0, sscratch, a0
+	# restore user a0, and save TRAPFRAME in sscratch  保存trapframe帧
+        csrrw a0, sscratch, a0  
         
         # return to user mode and user pc.
         # usertrapret() set up sstatus and sepc.

@@ -122,7 +122,7 @@ panic(char *s)
   printf(s);
   printf("\n");
   panicked = 1; // freeze uart output from other CPUs
-  for(;;)
+  for(;;)  // 为了防止进一步操作导致数据损坏或系统崩溃  将进入无限循环  可以通过外部干预
     ;
 }
 
@@ -131,4 +131,15 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+void
+backtrace(void){
+  uint64 fp = r_fp();
+    printf("backtrace:\n");
+    while (PGROUNDDOWN(fp) != PGROUNDUP(fp)) {          //当前帧指针fp是否在有效的页范围内
+      uint64 ra = *(uint64*)(fp - 8); // return address
+      printf("%p\n", ra);
+      fp = *(uint64*)(fp - 16); // previous fp
+  }
 }

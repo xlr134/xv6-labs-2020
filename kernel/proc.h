@@ -41,6 +41,21 @@ extern struct cpu cpus[NCPU];
 // the trapframe includes callee-saved user registers like s0-s11 because the
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
+
+// 为trampoline.S中的陷阱处理代码准备的进程级数据
+// 位于用户页表中跳板页（trampoline page）正下方的独立页面中
+// 在内核页表中没有特殊映射
+// sscratch寄存器指向此处
+// 
+// trampoline.S中的uservec会将用户寄存器状态保存到陷阱帧（trapframe）中，
+// 然后从陷阱帧的kernel_sp、kernel_hartid、kernel_satp等字段初始化寄存器，
+// 并跳转至kernel_trap。
+// 
+// usertrapret()和trampoline.S中的userret会设置陷阱帧的kernel_*字段，
+// 从陷阱帧恢复用户寄存器状态，切换到用户页表，然后进入用户空间。
+// 
+// 陷阱帧包含了被调用者保存的用户寄存器（如s0-s11），
+// 这是因为通过usertrapret()返回用户空间的路径不会经过完整的内核调用栈。
 struct trapframe {
   /*   0 */ uint64 kernel_satp;   // kernel page table
   /*   8 */ uint64 kernel_sp;     // top of process's kernel stack
@@ -84,6 +99,14 @@ enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
 struct proc {
+
+  //时钟相关
+  int alarm_interval;          //时钟周期，为0时表示禁用时钟
+  void(*alarm_handler)();      //时钟回调处理函数
+  int alarm_ticks;             //当前时钟信号数(ticks数)
+  struct trapframe* alarm_trapframe;    //时钟中断时刻进程的陷阱帧，用于恢复进程中断前的状态
+  int alarm_goingoff;          //是否已经有一个时钟中断正在执行且还未返回
+
   struct spinlock lock;
 
   // p->lock must be held when using these:

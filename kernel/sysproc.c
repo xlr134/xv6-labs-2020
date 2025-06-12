@@ -57,6 +57,7 @@ sys_sleep(void)
 {
   int n;
   uint ticks0;
+  backtrace();
 
   if(argint(0, &n) < 0)
     return -1;
@@ -94,4 +95,19 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_sigalarm(void){
+  int n;// n个ticks
+  uint64 fn; //时钟回调函数
+  if(argint(0,&n)<0 || argaddr(1,&fn)<0){// 获取第0个参数 和 第一个参数
+    return -1;
+  }
+  return _sigalarm(n,fn);
+}
+
+uint64 
+sys_sigreturn(void){
+  return  _sigreturn();
 }
