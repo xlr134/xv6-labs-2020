@@ -68,13 +68,8 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } 
-  else if(r_scause() == 13 || r_scause() == 15) {//惰性分配导致的缺页异常
-    uint64 fault_va = r_stval();                       //获取引发缺页异常的虚拟地址
-    char *pa = 0;                                      //分配的物理地址
-    //判断fault_va是否在进程栈空间之中
-    if(PGROUNDUP(p->trapframe->sp)-1<fault_va && fault_va<p->sz&&(pa!=kalloc())!=0){
-      
-    }
+  else if((r_scause() == 13 || r_scause() == 15)&&uvmshouidallocate((uint64)r_stval())) {//惰性分配导致的缺页异常
+    uvmlazyallocate((uint64)r_stval());
   }
     else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);

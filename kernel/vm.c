@@ -5,7 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -18,6 +19,7 @@ extern char trampoline[]; // trampoline.S
 /*
  * create a direct-map page table for the kernel.
  */
+
 void
 kvminit()
 {
@@ -181,9 +183,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      continue;
+      // panic("uvmunmap: walk");    惰性分配遇到不存在的页表项 就跳过
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue;
+      // panic("uvmunmap: not mapped"); 惰性分配遇到不存的页表项 就跳过
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -315,9 +319,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      // panic("uvmcopy: pte should exist");惰性分配导致某些pte未分配，遇到不存在的pte就跳过去
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      // panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -348,6 +354,36 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+
+//------判断页面是否是之前惰性分配的地址(开始)------
+int
+uvmshouidallocate(uint64 va){
+  pte_t * pte;
+  struct proc *p = myproc();
+  return va<p->sz  //确保地址在进程的内存大小范围内
+  && PGROUNDDOWN(va) != r_sp()//确保地址不在guard page中
+  &&(((pte=walk(p->pagetable,va,0))==0)||((*pte&PTE_V)==0));//确保页表项确实不存在
+}
+
+void
+uvmlazyallocate(uint64 va){
+  struct proc *p = myproc();
+  char *pa = kalloc();
+  if(pa==0){
+    printf("lazy alloc: out of memory\n");
+    p->killed = 1;
+  }
+  else{
+    memset(pa,0,PGSIZE);
+    if(mappages(p->pagetable,PGROUNDDOWN(va),PGSIZE,(uint64)pa,PTE_W|PTE_X|PTE_R|PTE_U)!=0){
+      printf("lazy alloc: mappages failed\n");
+      kfree(pa);
+      p->killed = 1;
+    }
+  }
+}
+//------判断页面是否是之前惰性分配的地址(结束)------
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -355,7 +391,8 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  if(uvmshouidallocate(dstva))
+    uvmlazyallocate(dstva);
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
@@ -380,7 +417,8 @@ int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  if(uvmshouidallocate((uint64)dst))
+    uvmlazyallocate((uint64)dst);
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
@@ -440,3 +478,5 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+

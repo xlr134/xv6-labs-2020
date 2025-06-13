@@ -13,3 +13,5 @@
     未映射区域（理论上属于进程地址空间，但未分配物理内存）
 
     由进程地址空间映射知，可以通过 PGROUNDUP(p->trapframe->sp)-1<fault_va && fault_va<p->sz 来判断当前虚拟地址是否栈栈空间（trao.c 75）
+
+懒加载测试与用户测试(Lazytests and Usertests)
