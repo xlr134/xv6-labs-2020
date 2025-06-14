@@ -67,6 +67,10 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if((r_scause()==13||r_scause()==15)&&uvmcheckcowpage(r_stval())){
+      // 发生页面错误,并且检测出错误是写时复制机制导致的页面不可泄,则执行写时复制
+      if(uvmcowcopy(r_stval())==-1)
+        p->killed = 1;
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -173,6 +177,10 @@ clockintr()
 // returns 2 if timer interrupt,
 // 1 if other device,
 // 0 if not recognized.
+// 检查是外部中断还是软件中断，并进行处理。
+// 若为定时器中断则返回 2，
+// 若为其他设备中断则返回 1，
+// 若未识别则返回 0。
 int
 devintr()
 {
@@ -183,6 +191,9 @@ devintr()
     // this is a supervisor external interrupt, via PLIC.
 
     // irq indicates which device interrupted.
+    // 这是一个通过 PLIC（平台级中断控制器）产生的超级用户外部中断。
+
+    //irq 用于指示是哪个设备产生的中断。
     int irq = plic_claim();
 
     if(irq == UART0_IRQ){

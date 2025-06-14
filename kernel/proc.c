@@ -47,6 +47,13 @@ procinit(void)
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
 // to a different CPU.
+// 必须在禁用中断的情况下调用此函数，
+// 以避免与进程被迁移到其他CPU的操作产生竞态条件。
+
+// 函数的正确运行依赖于中断被禁用这一前提。要是在函数执行过程中发生中断，可能会出现以下情况：
+// 被中断的进程也许会被调度器迁移到其他 CPU 上继续执行。
+// 当进程在新的 CPU 上恢复执行时，再次调用r_tp()获取到的将是新 CPU 的 ID，这就和之前获取的 ID 不一致了。
+// 这种不一致会让调用者对当前所处的 CPU 产生错误的认知，进而可能引发一系列严重问题，比如错误地访问本地 CPU 缓存。
 int
 cpuid()
 {

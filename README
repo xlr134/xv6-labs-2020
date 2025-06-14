@@ -1,45 +1,39 @@
-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
 
-ACKNOWLEDGMENTS
 
-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
-2000)). See also https://pdos.csail.mit.edu/6.828/, which
-provides pointers to on-line resources for v6.
+写时复制页：
+    对于父进程可写的页，标记COW写时复制。
+    有多个进程指向同一个物理页面时，该物理页面的引用计数等于进程数。
 
-The following people have made contributions: Russ Cox (context switching,
-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
-Clements.
 
-We are also grateful for the bug reports and patches contributed by
-Silas Boyd-Wickizer, Anton Burtsev, Dan Cross, Cody Cutler, Mike CAT,
-Tej Chajed, Asami Doi, eyalz800, , Nelson Elhage, Saar Ettinger, Alice
-Ferrazzi, Nathaniel Filardo, Peter Froehlich, Yakir Goaron,Shivam
-Handa, Bryan Henry, jaichenhengjie, Jim Huang, Alexander Kapshuk,
-Anders Kaseorg, kehao95, Wolfgang Keller, Jonathan Kimmitt, Eddie
-Kohler, Austin Liew, Imbar Marinescu, Yandong Mao, Matan Shabtay,
-Hitoshi Mitake, Carmi Merimovich, Mark Morrissey, mtasm, Joel Nider,
-Greg Price, Ayan Shafqat, Eldar Sehayek, Yongming Shen, Fumiya
-Shigemitsu, Takahiro, Cam Tenny, tyfkda, Rafael Ubal, Warren Toomey,
-Stephen Tu, Pablo Ventura, Xi Wang, Keiichi Watanabe, Nicolas
-Wolovick, wxdao, Grant Wu, Jindong Zhang, Icenowy Zheng, and Zou Chang
-Wei.
+PLIC（Platform-Level Interrupt Controller，平台级中断控制器）是 RISC-V 架构中用于处理外部中断的核心组件，其主要作用是管理和分发来自多个设备的中断请求，使处理器能够高效响应外设事件。以下是 PLIC 的关键作用和特点：
+    1. 集中式中断管理
+    PLIC 将来自多个外部设备（如 UART、定时器、网卡等）的中断请求集中处理，避免处理器直接连接每个设备的中断线，简化了系统设计。
+    2. 中断优先级与仲裁
+    优先级配置：每个中断源可设置独立优先级（通常 0 为禁用，1-7 为不同优先级级别）。
+    仲裁机制：当多个中断同时发生时，PLIC 根据优先级选择最高优先级的中断请求传递给处理器。
+    3. 中断分发与上下文切换
+    多处理器支持：PLIC 可将中断分发给不同的 CPU 核心，支持 SMP（对称多处理）架构。
+    上下文切换：通过设置中断目标（hart ID），PLIC 能将特定设备的中断定向到指定处理器核心。
+    4. 中断处理流程
+    中断请求：外设向 PLIC 发送中断信号。
+        优先级比较：PLIC 比较所有挂起中断的优先级。
+        中断请求传递：最高优先级的中断被发送到处理器的seip寄存器。
+        中断确认：处理器读取 PLIC 的claim寄存器获取中断 ID，并执行相应处理程序。
+        完成处理：处理结束后，处理器向 PLIC 的complete寄存器写入中断 ID，标记中断处理完成。
 
-The code in the files that constitute xv6 is
-Copyright 2006-2020 Frans Kaashoek, Robert Morris, and Russ Cox.
+#define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000) 
+用于计算 RISC-V 架构中特定处理器核心（hart）的 PLIC（Platform-Level Interrupt Controller）中断声明寄存器的地址。因为这部分是采用的直接映射，所以地址不能相同
 
-ERROR REPORTS
 
-Please send errors and suggestions to Frans Kaashoek and Robert Morris
-(kaashoek,rtm@mit.edu). The main purpose of xv6 is as a teaching
-operating system for MIT's 6.S081, so we are more interested in
-simplifications and clarifications than new features.
-
-BUILDING AND RUNNING XV6
-
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu. Once they are installed, and in your shell
-search path, you can run "make qemu".
+// 必须在禁用中断的情况下调用此函数，
+// 以避免与进程被迁移到其他CPU的操作产生竞态条件。
+int
+cpuid()
+{
+  int id = r_tp();
+  return id;
+}
+// 函数的正确运行依赖于中断被禁用这一前提。要是在函数执行过程中发生中断，可能会出现以下情况：
+// 被中断的进程也许会被调度器迁移到其他 CPU 上继续执行。
+// 当进程在新的 CPU 上恢复执行时，再次调用r_tp()获取到的将是新 CPU 的 ID，这就和之前获取的 ID 不一致了。
+// 这种不一致会让调用者对当前所处的 CPU 产生错误的认知，进而可能引发一系列严重问题，比如错误地访问本地 CPU 缓存。

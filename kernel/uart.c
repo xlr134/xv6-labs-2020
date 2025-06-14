@@ -165,17 +165,17 @@ uartstart()
 int
 uartgetc(void)
 {
-  if(ReadReg(LSR) & 0x01){
+  if(ReadReg(LSR) & 0x01){//通过读取 UART 的线路状态寄存器（LSR）判断是否有数据可读。
     // input data is ready.
-    return ReadReg(RHR);
+    return ReadReg(RHR);//如果有数据，从接收缓冲区寄存器（RHR）读取字符并返回。
   } else {
     return -1;
   }
 }
 
-// handle a uart interrupt, raised because input has
-// arrived, or the uart is ready for more output, or
-// both. called from trap.c.
+// handle a uart interrupt, raised because input has 处理 UART（通用异步收发传输器）中断
+// arrived, or the uart is ready for more output, or 中断触发的原因包括输入数据到达、UART 准备好发送新数据，或两种情况同时发生。
+// both. called from trap.c. 该中断处理函数由 trap.c 文件中的代码调用。
 void
 uartintr(void)
 {
