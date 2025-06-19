@@ -415,7 +415,7 @@ wait(uint64 addr)
       if(np->parent == p){
         // np->parent can't change between the check and the acquire()
         // because only the parent changes it, and we're the parent.
-        acquire(&np->lock);
+        acquire(&np->lock);//**Wait**会查看每个进程的**np->parent**来寻找它的子进程。它使用 **np->parent** 而不持有 **np->lock**，这违反了共享变量必须受锁保护的通常规则。但是**np**有可能是当前进程的祖先，在这种情况下，获取**np->lock**可能会导致死锁，因为这违反了上面提到的顺序。在这种情况下，在没有锁的情况下检查**np->parent**似乎是安全的；一个进程的父进程字段只有“父亲“改变，所以如果**np->parent==p**为真，除非当前进程改变它，否则该值就不会改变。
         havekids = 1;
         if(np->state == ZOMBIE){
           // Found one.
@@ -510,7 +510,7 @@ sched(void)
     panic("sched locks");
   if(p->state == RUNNING)
     panic("sched running");
-  if(intr_get())
+  if(intr_get())//确保中断已被禁用（intr_get() 返回 0），避免调度过程中被中断打断。
     panic("sched interruptible");
 
   intena = mycpu()->intena;
@@ -531,6 +531,8 @@ yield(void)
 
 // A fork child's very first scheduling by scheduler()
 // will swtch to forkret.
+// 调度器对 fork 子进程的首次调度
+// 会通过 swtch 切换到 forkret 函数执行
 void
 forkret(void)
 {
@@ -553,7 +555,7 @@ forkret(void)
 // Atomically release lock and sleep on chan.
 // Reacquires lock when awakened.
 void
-sleep(void *chan, struct spinlock *lk)
+sleep(void *chan, struct spinlock *lk)//chan 用于标识进程在等待的事件   lk当前持有的锁需要在睡眠前释放。并在唤醒后重新获取
 {
   struct proc *p = myproc();
   
@@ -563,11 +565,15 @@ sleep(void *chan, struct spinlock *lk)
   // guaranteed that we won't miss any wakeup
   // (wakeup locks p->lock),
   // so it's okay to release lk.
-  if(lk != &p->lock){  //DOC: sleeplock0
+  // 必须先获取进程 p 的锁（p->lock），才能修改 p->state 并调用 sched 函数。
+  // 一旦持有 p->lock，就能确保不会错过任何唤醒操作（因为 wakeup 函数会先锁定 p->lock），
+  // 因此此时可以安全地释放其他锁（lk）。
+  // 注意lk表示的是当前持有的锁
+  if(lk != &p->lock){  //DOC: sleeplock0  若 lk 就是进程锁 p->lock，执行 acquire(&p->lock) 会导致重复加锁，造成死锁。
     acquire(&p->lock);  //DOC: sleeplock1
     release(lk);
   }
-
+  
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;

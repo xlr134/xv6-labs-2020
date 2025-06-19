@@ -1,45 +1,19 @@
-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+Caller-saved 寄存器（调用者保存）
+    包括参数传递寄存器（如 RISC-V 中的a0-a7）和临时寄存器（如x5-x7、x28-x31）。
+    规则：若调用者（caller）在函数调用后仍需要这些寄存器的值，则必须在调用前自行保存（如压栈）。
+    用途：用于传递函数参数、存储临时计算结果等短期数据。
+Callee-saved 寄存器（被调用者保存）
+    包括保存寄存器（如 RISC-V 中的s0-s11）和帧指针（如fp/x8）。
+    规则：被调用函数（callee）在使用这些寄存器前必须先保存其原值，并在返回前恢复。
+    用途：用于存储需要在函数调用链中持续保留的数据（如局部变量、函数调用上下文）。
 
-ACKNOWLEDGMENTS
+调用proc.c 457 scheduler函数为什么需要通过swtch.S中的swtch函数？
+    个人理解：如果通过函数调用则调度器相当于每次从头开始执行，那么这样可能不适合于某些调度策略。并且swtch函数是汇编代码并不是平时的C代码函数，所以没有隐式的保存被调用者保存寄存器
+    所以需要手动保存。并且要恢复上一次保存的调度器的状态。因为这个相当于普通的函数调用 所以保存的寄存器和普通的函数调用保存的相同就可以。每次在swtch函数ret时，直接返回到ra寄存器
+    中保存的值。
+    注意：每次调用函数时ra的值都会被更新
 
-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
-2000)). See also https://pdos.csail.mit.edu/6.828/, which
-provides pointers to on-line resources for v6.
-
-The following people have made contributions: Russ Cox (context switching,
-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
-Clements.
-
-We are also grateful for the bug reports and patches contributed by
-Silas Boyd-Wickizer, Anton Burtsev, Dan Cross, Cody Cutler, Mike CAT,
-Tej Chajed, Asami Doi, eyalz800, , Nelson Elhage, Saar Ettinger, Alice
-Ferrazzi, Nathaniel Filardo, Peter Froehlich, Yakir Goaron,Shivam
-Handa, Bryan Henry, jaichenhengjie, Jim Huang, Alexander Kapshuk,
-Anders Kaseorg, kehao95, Wolfgang Keller, Jonathan Kimmitt, Eddie
-Kohler, Austin Liew, Imbar Marinescu, Yandong Mao, Matan Shabtay,
-Hitoshi Mitake, Carmi Merimovich, Mark Morrissey, mtasm, Joel Nider,
-Greg Price, Ayan Shafqat, Eldar Sehayek, Yongming Shen, Fumiya
-Shigemitsu, Takahiro, Cam Tenny, tyfkda, Rafael Ubal, Warren Toomey,
-Stephen Tu, Pablo Ventura, Xi Wang, Keiichi Watanabe, Nicolas
-Wolovick, wxdao, Grant Wu, Jindong Zhang, Icenowy Zheng, and Zou Chang
-Wei.
-
-The code in the files that constitute xv6 is
-Copyright 2006-2020 Frans Kaashoek, Robert Morris, and Russ Cox.
-
-ERROR REPORTS
-
-Please send errors and suggestions to Frans Kaashoek and Robert Morris
-(kaashoek,rtm@mit.edu). The main purpose of xv6 is as a teaching
-operating system for MIT's 6.S081, so we are more interested in
-simplifications and clarifications than new features.
-
-BUILDING AND RUNNING XV6
-
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu. Once they are installed, and in your shell
-search path, you can run "make qemu".
+调度时遵循：
+    遵循 “获取 - 切换 - 释放” 的顺序
+    进程第一次执行的时候，会从frokret开始执行（释放锁） 
+    注意：proc.c 中 allocproc 将第一次上下文切换的返回地址设置为forkret  p->context.ra = (uint64)forkret;

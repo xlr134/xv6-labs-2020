@@ -5,8 +5,9 @@
 #include <pthread.h>
 #include <sys/time.h>
 
-#define NBUCKET 5
+#define NBUCKET 5   //同时可以进行操作的线程最大数量
 #define NKEYS 100000
+pthread_mutex_t lock[NBUCKET];
 
 struct entry {
   int key;
@@ -28,7 +29,7 @@ now()
 static void 
 insert(int key, int value, struct entry **p, struct entry *n)
 {
-  struct entry *e = malloc(sizeof(struct entry));
+  struct entry *e = (struct entry *)malloc(sizeof(struct entry));
   e->key = key;
   e->value = value;
   e->next = n;
@@ -39,6 +40,7 @@ static
 void put(int key, int value)
 {
   int i = key % NBUCKET;
+  pthread_mutex_lock(&lock[i]);
 
   // is the key already present?
   struct entry *e = 0;
@@ -53,6 +55,7 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
+  pthread_mutex_unlock(&lock[i]);
 }
 
 static struct entry*
@@ -60,12 +63,10 @@ get(int key)
 {
   int i = key % NBUCKET;
 
-
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key) break;
   }
-
   return e;
 }
 
@@ -74,7 +75,7 @@ put_thread(void *xa)
 {
   int n = (int) (long) xa; // thread number
   int b = NKEYS/nthread;
-
+  
   for (int i = 0; i < b; i++) {
     put(keys[b*n + i], n);
   }
@@ -108,13 +109,15 @@ main(int argc, char *argv[])
     exit(-1);
   }
   nthread = atoi(argv[1]);
-  tha = malloc(sizeof(pthread_t) * nthread);
+  tha = (pthread_t *)malloc(sizeof(pthread_t) * nthread);
   srandom(0);
   assert(NKEYS % nthread == 0);
   for (int i = 0; i < NKEYS; i++) {
     keys[i] = random();
   }
-
+  //对锁进行初始化
+  for(int i = 0; i < NBUCKET; i++) 
+    pthread_mutex_init(&lock[i],NULL);
   //
   // first the puts
   //
